@@ -1,0 +1,151 @@
+# This workflow builds boost and creates the formal release which goes in the website
+name: Create release
+on:
+  push:
+    branches:
+      - '*' # Run tests on all branches. Upload to AWS if master or develop.
+    tags:
+      - boost-* # Run tests on version tags. Upload to AWS with version tag.
+  pull_request:
+    branches:
+      - master # Run tests on PRs. Don't upload.
+      - develop
+
+concurrency:
+  group: ${{format('{0}:{1}', github.repository, github.ref)}}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Create releases
+    runs-on: ubuntu-latest
+    container:
+      image: cppalliance/boost_superproject_build:20.04-v1
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Environment
+        run: |
+          set -xe
+          env
+          pwd
+          ps -p $$
+          
+          echo "HOME=/root" >> $GITHUB_ENV
+          git config --global --add safe.directory /__w/boost/boost
+          chown -R root:root /__w/boost/boost
+          
+          ls -al
+          ls -al /root
+          ln -s /root/build build
+          ls .
+          ls build
+
+      - name: Antora setup
+        run: |
+          set -xe
+          
+          apt-get update
+          apt-get install -y nodejs
+          node -v
+          
+          wget -qO- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash
+          export NVM_DIR="$HOME/.nvm"
+          source "$NVM_DIR/nvm.sh"
+          PATH=$PATH:${HOME}/.nvm
+          echo "${HOME}/.nvm" >> $GITHUB_PATH
+          nvm --version
+          nvm install --lts
+          
+          npm i -g npx || true
+          
+          npm i -g @antora/cli@3.1 @antora/site-generator@3.1
+          npm i -g gulp-cli
+
+      - name: Checkout post
+        run: |
+          python3 ./release/ci_boost_release.py checkout_post
+
+      - name: Build
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          source "$NVM_DIR/nvm.sh"
+          export CIRCLECI=true
+          export CIRCLE_BRANCH=develop
+          CIRCLE_WORKING_DIRECTORY=$(pwd)
+          export CIRCLE_WORKING_DIRECTORY
+          export JOBS=$(grep -c ^processor /proc/cpuinfo)
+          echo "JOBS=$JOBS"
+          python3 ./release/ci_boost_release.py test_override --build-dir=build --releases-dir=releases
+
+      - name: Find AWS Release
+        id: docs-dir
+        run: |
+          # Store doc release path
+          pwd
+          ls releases
+          boost_docs_dir=$(find releases -type d -name "boost_*-docs" -print -quit)
+          echo "$boost_docs_dir"
+          boost_docs_basename=$(basename "$boost_docs_dir")
+          echo "boost_docs_basename=$boost_docs_basename"
+          echo "boost_docs_basename=$boost_docs_basename" >> $GITHUB_OUTPUT
+
+      - name: AWS Sync (revsys cluster)
+        if: github.ref_name == 'develop' || github.ref_name == 'master' || startsWith(github.ref_name, 'refs/tags/boost-')
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --follow-symlinks --delete
+        env:
+          AWS_S3_BUCKET: ${{ secrets.REVSYS_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.REVSYS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.REVSYS_ACCESS_KEY }}
+          AWS_REGION: 'us-east-2'
+          SOURCE_DIR: ${{ format('releases/{0}', steps.docs-dir.outputs.boost_docs_basename) }}
+          DEST_DIR: ${{ format('site/{0}', (github.ref_name == 'develop' && 'develop') || (github.ref_name == 'master' && 'master') || github.ref_name_name) }}
+
+      - name: AWS Sync (staging on GKE)
+        if: github.ref_name == 'develop' || github.ref_name == 'master' || startsWith(github.ref_name, 'refs/tags/boost-')
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --follow-symlinks --delete
+        env:
+          AWS_S3_BUCKET: ${{ secrets.BOOST_STAGE_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BOOST_STAGE_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BOOST_STAGE_ACCESS_KEY }}
+          AWS_REGION: 'us-east-2'
+          SOURCE_DIR: ${{ format('releases/{0}', steps.docs-dir.outputs.boost_docs_basename) }}
+          DEST_DIR: ${{ format('site/{0}', (github.ref_name == 'develop' && 'develop') || (github.ref_name == 'master' && 'master') || github.ref_name_name) }}
+
+      - name: AWS Sync (staging on GKE)
+        if: false && (github.ref_name == 'develop' || github.ref_name == 'master' || startsWith(github.ref_name, 'refs/tags/boost-'))
+        uses: jakejarvis/s3-sync-action@master
+        with:
+          args: --follow-symlinks --delete
+        env:
+          AWS_S3_BUCKET: ${{ secrets.BOOST_PRODUCTION_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BOOST_PRODUCTION_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BOOST_PRODUCTION_ACCESS_KEY }}
+          AWS_REGION: 'us-east-2'
+          SOURCE_DIR: ${{ format('releases/{0}', steps.docs-dir.outputs.boost_docs_basename) }}
+          DEST_DIR: ${{ format('site/{0}', (github.ref_name == 'develop' && 'develop') || (github.ref_name == 'master' && 'master') || github.ref_name_name) }}
+
+      - name: Remove release dirs
+        run: find "releases" -mindepth 1 -maxdepth 1 -type d -exec rm -r {} +
+
+      - name: Publish Releases as Artifacts
+        if: github.event_name == 'push'
+        uses: kittaakos/upload-artifact-as-is@v0
+        with:
+          path: releases
+
+      - uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/boost-')
+        with:
+          files: |
+            releases/${{ github.ref_name }}*.*
+            

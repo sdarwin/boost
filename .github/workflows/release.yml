@@ -1,4 +1,5 @@
-name: Release
+# This workflow creates the github release, which is basically all libs with git related files removed
+name: Github Release
 
 on:
   push:
