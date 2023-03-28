@@ -1,0 +1,5 @@
+Temporary directory with release scripts adapted for antora docs.
+
+These are scripts that are usually located in https://github.com/boostorg/release-tools
+
+That's where they should go once the antora-enabled release process is implemented.
