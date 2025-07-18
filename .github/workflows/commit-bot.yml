@@ -15,6 +15,7 @@ name: Commit Bot
 # To avoid infinite loops, don't trigger on "push"
 on:
   push:
+    - feature/**
   schedule:
     - cron: "0,30 * * * *"
 
@@ -26,7 +27,7 @@ jobs:
   update-modules:
     runs-on: ubuntu-latest
     name: Commit Bot
-    if: github.repository == 'boostorg/boost'
+    # if: github.repository == 'boostorg/boost'
 
     steps:
       - name: Check for module updates
