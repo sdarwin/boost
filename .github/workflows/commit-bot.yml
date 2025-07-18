@@ -14,6 +14,7 @@ name: Commit Bot
 
 # To avoid infinite loops, don't trigger on "push"
 on:
+  push:
   schedule:
     - cron: "0,30 * * * *"
 
